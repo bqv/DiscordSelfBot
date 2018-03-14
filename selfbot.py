@@ -7,6 +7,7 @@ import sqlite3
 import sys
 import json
 import os
+import copy
 import time
 import shlex
 import subprocess
@@ -42,6 +43,7 @@ class SelfBot:
             self.logdb = sqlite3.connect('logs.db')
             cursor = self.logdb.cursor()
             cursor.execute('pragma foreign_keys=ON')
+            cursor.execute('vacuum')
             self.logdb.commit()
         else:
             self.logdb = sqlite3.connect('logs.db')
@@ -298,7 +300,7 @@ class SelfBot:
                     after.channel.id,
                     after.id,
                     after.author.id,
-                    after.content + ' ' + ' '.join(a.url for a in message.attachments),
+                    after.content + ' ' + ' '.join(a.url for a in after.attachments),
                     int(time.mktime(before.edited_at.timetuple() if before.edited_at else after.created_at.timetuple())),
                     1
                 ))
@@ -314,7 +316,7 @@ class SelfBot:
         print("Parsing command {} with parameters {}".format(command, parameters))
         if recursion >= MAX_RECURSION_DEPTH:
             print("Hit max recursion depth of {}".format(MAX_RECURSION_DEPTH))
-            await self.reply(message, "ERROR: reached max recursion depth of {}".format(MAX_RECURSION_DEPTH))
+            await self.replyembed(message, "ERROR: reached max recursion depth of {}".format(MAX_RECURSION_DEPTH), colour=discord.Colour.red())
             return
         if isinstance(message.channel, discord.TextChannel):
             pm = False
@@ -322,10 +324,10 @@ class SelfBot:
             pm = True
         if command in self.commands:
             if pm and not self.commands[command][2][1]:
-                await self.reply(message, "ERROR: Command {} may not be used in pm!".format(command))
+                await self.replyembed(message, "ERROR: Command {} may not be used in pm!".format(command), colour=discord.Colour.red())
                 return
             elif not pm and not self.commands[command][2][0]:
-                await self.reply(message, "ERROR: Command {} may not be used in a guild!".format(command))
+                await self.replyembed(message, "ERROR: Command {} may not be used in a guild!".format(command), colour=discord.Colour.red())
                 return
             else:
                 try:
@@ -333,7 +335,7 @@ class SelfBot:
                 except:
                     traceback.print_exc()
                     try:
-                        await self.reply(message, "**Error in command:** {0}\n```py\n{1}```".format(message.content, traceback.format_exc()))
+                        await self.replyembed(message, "**Error in command:** {0}\n```py\n{1}```".format(message.content, traceback.format_exc()), colour=discord.Colour.red())
                     except:
                         print("Printing error message failed, wtf?")
         elif command in self.aliases:
@@ -341,10 +343,21 @@ class SelfBot:
             actual_params = ' '.join(self.aliases[command].split(' ')[1:]).format(parameters, *parameters.split(' '))
             await self.parse_command(message, aliased_command, actual_params, recursion=recursion + 1)
         else:
-            await self.reply(message, "Invalid command.")
+            await self.replyembed(message, "Invalid command.", colour=discord.Colour.red())
 
     async def reply(self, message, text):
         await message.edit(content=text)
+
+    async def replyembed(self, message, text, colour=discord.Colour.default()):
+        embed = None
+        if message.embeds:
+            embed = copy.deepcopy(message.embeds[0])
+            embed.description = text
+            embed.colour = colour
+        else:
+            embed = discord.Embed(title="", description=text, colour=colour)
+            embed.set_footer(text=message.clean_content, icon_url=self.client.user.avatar_url)
+        await message.edit(content='', embed=embed)
 
     async def _async(self, message, parameters, recursion=0):
         if parameters == '':
@@ -436,12 +449,8 @@ class SelfBot:
             return (p.stdout.read(), p.wait())
  
 class Util:
-    def strtodatetime(string):
-        return datetime.datetime.strptime(string, '%Y-%m-%d %H:%M:%S.%f')
-
     def strfdelta(delta):
         output = [[delta.days, 'day'],
-                  [delta.seconds // 3600, 'hour'],
                   [delta.seconds // 60 % 60, 'minute'],
                   [delta.seconds % 60, 'second']]
         for i in range(len(output)):
@@ -484,11 +493,11 @@ if __name__ == "__main__":
 
     @bot.cmd("```\n{0}shutdown takes no arguments\n\nShuts the bot down.```")
     async def shutdown(bot, message, parameters, recursion=0):
-        await bot.reply(message, 'Shutting down.')
+        await bot.replyembed(message, '*Shutting down*.', colour=discord.Colour.gold())
         await asyncio.sleep(0.2)
-        await bot.reply(message, 'Shutting down..')
+        await bot.replyembed(message, '*Shutting down*..', colour=discord.Colour.gold())
         await asyncio.sleep(0.2)
-        await bot.reply(message, 'Shutting down...')
+        await bot.replyembed(message, '*Shutting down*...', colour=discord.Colour.gold())
         await asyncio.sleep(0.2)
         await message.delete()
         await bot.client.logout()
@@ -499,7 +508,9 @@ if __name__ == "__main__":
         ts = message.created_at
         await bot.reply(message, 'PONG!')
         latency = message.edited_at - ts
-        await bot.reply(message, "PONG! {}ms".format(latency.microseconds // 1000))
+        embed = discord.Embed(title="", description="{}ms".format(latency.microseconds // 1000))
+        embed.set_footer(text="{0}ping {1}".format(bot.conf['prefix'], parameters), icon_url=bot.client.user.avatar_url)
+        await message.edit(content='', embed=embed)
     @bot.cmd("```\n{0}longasync <async string>\n\nExecutes <async string> as a coroutine.```", "async")
     async def longasync(bot, message, parameters, recursion=0):
         output, errorcode = await bot._async(message, parameters, recursion)
@@ -603,7 +614,7 @@ if __name__ == "__main__":
         if len(output) > 1500:
             output = output[:1500] + "..."
         if errorcode == 1:
-            await bot.reply(message, "**Success** :thumbsup:")
+            await bot.replyembed(message, "**Success** :thumbsup:", discord.Colour.green())
         else:
             await bot.reply(message, "```sql\n{}\n```".format(output))
 
@@ -638,7 +649,7 @@ if __name__ == "__main__":
         if not user:
             user = message.author.id
         elif not user.isdigit():
-            await bot.reply(message, "ERROR: Please enter a valid user.")
+            await bot.replyembed(message, "ERROR: Please enter a valid user.", discord.Colour.red())
             return
         else:
             user = int(user)
@@ -650,7 +661,7 @@ if __name__ == "__main__":
         if guild:
             member = guild.get_member(user)
             if not member:
-                await bot.reply(message, "ERROR: Please enter a valid member mention or id.")
+                await bot.replyembed(message, "ERROR: Please enter a valid member mention or id.", discord.Colour.red())
                 return
             embed = discord.Embed(title = "User Info", description = member.name+"#"+member.discriminator)
             embed.add_field(name = "Nickname", value = member.nick, inline = True)
@@ -665,7 +676,7 @@ if __name__ == "__main__":
             embed.add_field(name = "Roles", value = '\n'.join([r.name.replace("@everyone", "@\u200beveryone") for r in guild.role_hierarchy if r in member.roles]), inline = False)
             embed.add_field(name = "Joined At", value = "{member.joined_at} ({} ago)".format(Util.strfdelta(datetime.datetime.utcnow() - member.joined_at), member=member), inline = True)
         else:
-            await bot.reply(message, "ERROR: Could not get info on user")
+            await bot.replyembed(message, "ERROR: Could not get info on user", discord.Colour.red())
             return
         embed.add_field(name = "Created At", value = "{member.created_at} ({} ago)".format(Util.strfdelta(datetime.datetime.utcnow() - member.created_at), member=member), inline = True)
         embed.set_image(url = member.avatar_url)
@@ -729,9 +740,9 @@ if __name__ == "__main__":
                     members_with_role.append(member)
             for member in members_with_role:
                 await member.remove_roles(role)
-            await bot.reply(message, "Removed role **{}** from **{}** member{}.".format(role.name, len(members_with_role), '' if len(members_with_role) == 1 else 's'))
+            await bot.replyembed(message, "Removed role **{}** from **{}** member{}.".format(role.name, len(members_with_role), '' if len(members_with_role) == 1 else 's'), discord.Colour.green())
         else:
-            await bot.reply(message, "ERROR: could not find role named {}. Please ensure the role is spelled correctly and your capitalization is correct.".format(parameters))
+            await bot.replyembed(message, "ERROR: could not find role named {}. Please ensure the role is spelled correctly and your capitalization is correct.".format(parameters), colour=discord.Colour.red())
 
     @bot.cmd("```\n{0}changegame [<game>]\n\nChanges your Playing... message to [<game>] or unsets it.```")
     async def changegame(bot, message, parameters, recursion=0):
@@ -744,7 +755,7 @@ if __name__ == "__main__":
         else:
             game = discord.Game(name=parameters)
         await bot.client.change_presence(activity=game, status=me.status)
-        await bot.reply(message, ":thumbsup:")
+        await bot.replyembed(message, ":thumbsup:", discord.Colour.green())
 
     @bot.cmd("```\n{0}changestatus <status>\n\nChanges your status. Status must be one of: online, idle, dnd, invisible.```")
     async def changestatus(bot, message, parameters, recursion=0):
@@ -765,7 +776,7 @@ if __name__ == "__main__":
                 msg = ":thumbsup:"
             else:
                 msg = "Status must be one of: online, idle, dnd, invisible."
-        await bot.reply(message, msg)
+        await bot.replyembed(message, msg, discord.Colour.blue())
                 
     @bot.cmd("```\n{0}role <add | remove> <mention1 [mention2 ...]> <role name>\n\nAdds or removes <role name> from each member in <mentions>.```", pm=False)
     async def role(bot, message, parameters, recursion=0):
@@ -780,7 +791,7 @@ if __name__ == "__main__":
         elif action in ['remove', '-']:
             action = 'remove'
         else:
-            await bot.reply(message, "ERROR: first parameter must be one of: add, remove.")
+            await bot.replyembed(message, "ERROR: first parameter must be one of: add, remove.", colour=discord.Colour.red())
             return
         params = params[1:]
         ids = [x.strip('<@!>') for x in params if x.strip('<@!>').isdigit()]
@@ -788,15 +799,15 @@ if __name__ == "__main__":
         members = [guild.get_member(int(x)) for x in ids]
         members = [x for x in members if x]
         if not members:
-            await bot.reply(message, "ERROR: no valid mentions found.")
+            await bot.replyembed(message, "ERROR: no valid mentions found.", colour=discord.Colour.red())
             return
         role = ' '.join(params)
         if not role:
-            await bot.reply(message, "ERROR: no role name given!")
+            await bot.replyembed(message, "ERROR: no role name given!", colour=discord.Colour.red())
             return
         roles = [x for x in guild.role_hierarchy if x.name == role]
         if not roles:
-            await bot.reply(message, "ERROR: could not find role named {}. Please ensure the role is spelled correctly and your capitalization is correct.".format(role))
+            await bot.replyembed(message, "ERROR: could not find role named {}. Please ensure the role is spelled correctly and your capitalization is correct.".format(role), colour=discord.Colour.red())
             return
         role = roles[0]
         if action == 'add':
@@ -809,7 +820,7 @@ if __name__ == "__main__":
             msg = "Successfully added **{}** to **{}** member{}."
         elif action == 'remove':
             msg = "Successfully removed **{}** from **{}** member{}."
-        await bot.reply(message, msg.format(role.name, len(members), '' if len(members) == 1 else 's'))
+        await bot.replyembed(message, msg.format(role.name, len(members), '' if len(members) == 1 else 's'), discord.Colour.green())
 
     @bot.cmd("```\n{0}help <command>\n\nDisplays hopefully helpful information on <command>. Try {0}list for a listing of commands.```")
     async def help(bot, message, parameters, recursion=0):
@@ -818,11 +829,11 @@ if __name__ == "__main__":
         if parameters in bot.commands:
             await bot.reply(message, bot.commands[parameters][1].format(bot.conf['prefix']))
         else:
-            await bot.reply(message, "Command {} does not exist.".format(parameters))
+            await bot.replyembed(message, "Command {} does not exist.".format(parameters), discord.Colour.red())
 
     @bot.cmd("```\n{0}listcmds takes no arguments\n\nDisplays a listing of commands.```", "list")
     async def listcmds(bot, message, parameters, recursion=0):
-        await bot.reply(message, "Available commands: *{}*".format('*, *'.join(sorted(bot.commands))))
+        await bot.replyembed(message, "Available commands: *{}*".format('*, *'.join(sorted(bot.commands))), discord.Colour.purple())
 
     @bot.cmd("```\n{0}reply <message>\n\nReplies with <message>. Use with aliases for more fun!```")
     async def reply(bot, message, parameters, recursion=0):
@@ -838,19 +849,19 @@ if __name__ == "__main__":
         if tgt:
             if msg:
                 await tgt.send_message(msg)
-                await bot.reply(message, ":thumbsup:")
+                await bot.replyembed(message, ":thumbsup:", discord.Colour.green())
             else:
-                await bot.reply(message, "ERROR: Cannot send an empty message.")
+                await bot.replyembed(message, "ERROR: Cannot send an empty message.", colour=discord.Colour.red())
         else:
-            await bot.reply(message, "ERROR: Target with id {} not found.".format(target))
+            await bot.replyembed(message, "ERROR: Target with id {} not found.".format(target), colour=discord.Colour.red())
 
     @bot.cmd("```\n{0}echo <message>\n\nSends <message> to the same channel the command was used in.```")
     async def echo(bot, message, parameters, recursion=0):
         if parameters == "":
-            await bot.reply(message, "ERROR: Cannot send an empty message.")
+            await bot.replyembed(message, "ERROR: Cannot send an empty message.", colour=discord.Colour.red())
             return
         await message.channel.send(parameters)
-        await bot.reply(message, ":thumbsup:")
+        await bot.replyembed(message, ":thumbsup:", discord.Colour.green())
 
     @bot.cmd("```\n{0}alias <add | edit | remove | list | show> <alias name> [<command string>]\n\nManipulates aliases.```")
     async def alias(bot, message, parameters, recursion=0):
@@ -868,27 +879,27 @@ if __name__ == "__main__":
             elif action in ['show', 'remove', '-', 'del', 'delete']:
                 await bot.reply(message, "```\n{0}alias {1} <alias name>```".format(prefix, action))
             elif action == 'list':
-                await bot.reply(message, "Available aliases: {}".format(', '.join(sorted(aliases))))
+                await bot.replyembed(message, "Available aliases: {}".format(', '.join(sorted(aliases))))
             return
         alias = params[1]
         if not alias in bot.aliases and action not in ['add', '+']:
-            await bot.reply(message, "ERROR: alias {} does not exist!".format(alias))
+            await bot.replyembed(message, "ERROR: alias {} does not exist!".format(alias), colour=discord.Colour.red())
             return
         if alias in bot.aliases and action in ['add', '+']:
-            await bot.reply(message, "ERROR: alias {} already exists. Use `{}alias edit` instead.".format(alias, prefix))
+            await bot.replyembed(message, "ERROR: alias {} already exists. Use `{}alias edit` instead.".format(alias, prefix), colour=discord.Colour.red())
             return
         if len(params) == 2:
             if action in ['add', '+', 'edit', '=']:
                 await bot.reply(message, "```\n{0}alias {1} {2} <command string>```".format(prefix, action, alias))
             elif action == 'show':
-                await bot.reply(message, "**{}** is an alias for: ```\n{}\n```".format(alias, bot.aliases[alias]))
+                await bot.replyembed(message, "**{}** is an alias for: ```\n{}\n```".format(alias, bot.aliases[alias]), discord.Colour.purple())
             elif action in ['remove', 'del', 'delete', '-']:
                 del bot.aliases[alias]
-                await bot.reply(message, "Successfully deleted alias **{}**.".format(alias))
+                await bot.replyembed(message, "Successfully deleted alias **{}**.".format(alias), discord.Colour.green())
         else:
             commandstring = ' '.join(params[2:])
             bot.aliases[alias] = commandstring
-            await bot.reply(message, "Successfully {} alias **{}**.".format(action + "ed", alias))
+            await bot.replyembed(message, "Successfully {} alias **{}**.".format(action + "ed", alias), discord.Colour.green())
         with open('aliases.json', 'w') as aliases_file:
             json.dump(bot.aliases, aliases_file)
 
@@ -914,7 +925,7 @@ if __name__ == "__main__":
             return
         iddatestring = params[1]
         if not iddatestring in map(str, bot.scheduler) and action not in ['add', '+']:
-            await bot.reply(message, "ERROR: id {} does not exist!".format(iddatestring))
+            await bot.replyembed(message, "ERROR: id {} does not exist!".format(iddatestring), colour=discord.Colour.red())
             return 
         if len(params) == 2:
             if action in ['add', '+', 'edit', '=']:
@@ -926,7 +937,7 @@ if __name__ == "__main__":
             elif action in ['remove', 'del', 'delete', '-']:
                 iddatestring = int(iddatestring)
                 del bot.scheduler[iddatestring]
-                await bot.reply(message, "Successfully deleted scheduled command with id **{}**.".format(iddatestring))
+                await bot.replyembed(message, "Successfully deleted scheduled command with id **{}**.".format(iddatestring), discord.Colour.green())
         else:
             if bot.scheduler:
                 schid = max(bot.scheduler) + 1
@@ -935,7 +946,7 @@ if __name__ == "__main__":
             commandstring = ' '.join(params[2:])
             delta = Util.convdatestring(iddatestring)
             bot.scheduler[schid] = [datetime.datetime.now() + delta, message, commandstring, recursion + 1]
-            await bot.reply(message, "Successfully scheduled command with id **{}** to run in **{}**: ```\n{}\n```".format(schid, Util.strfdelta(delta), commandstring))
+            await bot.reply(message, "Successfully scheduled command with id **{}** to run in **{}**: ```\n{}\n```".format(schid, Util.strfdelta(delta), commandstring), discord.Colour.green())
 
     @bot.cmd("```\n{0}timer <date string>\n\nDisplays a running timer. Date string is in the format #d#h#m#s, corresponding to days, "
                   "hours, minutes, and seconds. You may omit up to 3 of the aforementioned categories.```")
@@ -946,9 +957,9 @@ if __name__ == "__main__":
         delta = Util.convdatestring(parameters)
         timerend = delta + datetime.datetime.now()
         while timerend > datetime.datetime.now():
-            await bot.reply(message, str(timerend - datetime.datetime.now()))
+            await bot.replyembed(message, str(timerend - datetime.datetime.now()), discord.Colour.gold())
             await asyncio.sleep(0.5)
-        await bot.reply(message, "Timer of **" + parameters + "** finished successfully!")
+        await bot.replyembed(message, "Timer of **" + parameters + "** finished successfully!", discord.Colour.green())
 
     @bot.cmd("```\n{0}purge <number of messages>\n\nPurges messages from the current channel.```")
     async def purge(bot, message, parameters, recursion=0):
@@ -956,17 +967,19 @@ if __name__ == "__main__":
             await bot.reply(message, bot.commands['purge'][1].format(bot.conf['prefix']))
             return
         if not parameters.isdigit():
-            await bot.reply(message, "Number of messages to purge must be a positive integer.")
+            await bot.replyembed(message, "Error: Number of messages to purge must be a positive integer.", colour=discord.Colour.red())
             return
 
-        async for msg in message.channel.history(limit=int(parameters) + 1):
+        msglist = message.channel.history(limit=int(parameters) + 1)
+        await msglist.next()
+        async for msg in msglist:
             try:
                 await msg.delete()
             except:
                 pass
-        success_msg = await message.channel.send("Successfully purged **" + parameters + "** messages! :thumbsup:")
+        await bot.replyembed(message, "Successfully purged **" + parameters + "** messages! :thumbsup:", discord.Colour.green())
         await asyncio.sleep(2)
-        await success_msg.delete()
+        await message.delete()
 
     @bot.cmd("```\n{0}react <string>\n\nReacts using Regional Indicator Symbol Letters.```")
     async def react(bot, message, parameters, recursion=0):
@@ -1016,16 +1029,49 @@ if __name__ == "__main__":
                 voicechannels.append(channel)
         source = discord.utils.get(voicechannels, name=params[0])
         if not source:
-            await bot.reply(message, "**Error**: No such voice channel {}".format(params[0]))
+            await bot.replyembed(message, "**Error**: No such voice channel {}".format(params[0]), discord.Colour.red())
+            return
         target = discord.utils.get(voicechannels, name=params[1])
         if not target:
-            await bot.reply(message, "**Error**: No such voice channel {}".format(params[1]))
+            await bot.replyembed(message, "**Error**: No such voice channel {}".format(params[1]), discord.Colour.red())
+            return
 
         users = source.members
         for member in users:
             await member.edit(voice_channel=target)
 
-        await bot.reply(message, "Moved {} users from {} to {} :thumbsup:".format(len(users), source, target))
+        await bot.replyembed(message, "Moved {} users from {} to {} :thumbsup:".format(len(users), source, target), discord.Colour.green())
+
+    @bot.cmd("```\n{0}seen [<user>]\n\nDisplays seen information about [<user>].```")
+    async def seen(bot, message, parameters, recursion=0):
+        user = parameters.strip("<!@>")
+        if not user:
+            user = message.author.id
+        elif not user.isdigit():
+            await bot.replyembed(message, "ERROR: Please enter a valid user.", discord.Colour.red())
+            return
+        else:
+            user = int(user)
+
+        cursor = bot.logdb.cursor()
+        cursor.execute('''
+            SELECT datetime(m.time, 'unixepoch') as timestamp, g.name as guild, c.name as channel, CASE WHEN n.nick IS NULL THEN u.name ELSE n.nick END as name, m.text, m.type FROM messages AS m
+            INNER JOIN guilds AS g ON m.guild = g.guild
+            INNER JOIN channels AS c ON m.channel = c.channel
+            INNER JOIN users AS u ON m.user = u.user
+            INNER JOIN nicks AS n ON m.guild = n.guild AND m.user = n.user
+            WHERE m.guild IS NOT NULL AND m.user = ?
+            ORDER BY m.time DESC
+            LIMIT 1
+        ''', (user,))
+        row = cursor.fetchone()
+        if not row:
+            await bot.replyembed(message, "I have not seen {} recently.".format(parameters), colour=discord.Colour.orange())
+        else:
+            if row[5] == 0:
+                await bot.replyembed(message, 'Last saw **{3}** messaging "{4}" in channel **#{2}** on server **{1}** at **{0} UTC**'.format(*row), colour=discord.Colour.green())
+            else:
+                await bot.replyembed(message, 'Last saw **{3}** editing a message to "{4}" in channel **#{2}** on server **{1}** at **{0} UTC**'.format(*row), colour=discord.Colour.green())
 
     bot.run()
 
