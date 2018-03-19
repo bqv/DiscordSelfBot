@@ -22,7 +22,7 @@ MENTION_REGEX = r"<@!>(\d+)>"
 
 class SelfBot:
     def __init__(self):
-        self.client = discord.Client(fetch_offline_members=False)
+        self.client = discord.Client(fetch_offline_members=False, heartbeat_timeout=30)
 
         self.commands = {}
         self.aliases = {}
@@ -163,6 +163,7 @@ class SelfBot:
                 message.author.name
             ))
             if isinstance(message.channel, discord.TextChannel):
+                print("[{0.created_at}] [{0.guild.name}/{0.channel.name}] <{0.author.display_name}> {0.clean_content}".format(message))
                 cursor.execute('''
                     INSERT OR REPLACE INTO guilds(guild, name) VALUES(?,?)
                 ''', (
@@ -199,6 +200,7 @@ class SelfBot:
                 ))
             else:
                 if isinstance(message.channel, discord.DMChannel):
+                    print("[{0.created_at}] [{0.channel.recipient.name}#{0.channel.recipient.discriminator}] <{0.author.display_name}> {0.clean_content}".format(message))
                     cursor.execute('''
                         INSERT OR REPLACE INTO channels(channel, guild, name) VALUES(?,?,?)
                     ''', (
@@ -207,6 +209,7 @@ class SelfBot:
                         message.channel.recipient.name+'#'+message.channel.recipient.discriminator
                     ))
                 else: #isinstance(message.channel, discord.GroupChannel)
+                    print("[{0.created_at}] [{0.channel.name}] <{0.author.display_name}> {0.clean_content}".format(message))
                     cursor.execute('''
                         INSERT OR REPLACE INTO channels(channel, guild, name) VALUES(?,?,?)
                     ''', (
@@ -1076,7 +1079,7 @@ if __name__ == "__main__":
             await asyncio.sleep(0.5)
         await msg.delete()
 
-    @bot.cmd("```\n{0} <source> <target>\n\nMoves users from one voice channel to another.```")
+    @bot.cmd("```\n{0} <source> <target>\n\nMoves users from one voice channel to another.```", pm=False)
     async def move(bot, message, parameters, recursion=0):
         params = shlex.split(parameters)
         if len(params) != 2:
@@ -1142,7 +1145,7 @@ if __name__ == "__main__":
         choice =  "Result: "+random.choice(choices)
         await bot.reply(message, choice, colour=discord.Colour.green())
 
-    @bot.cmd("```\n{0} [channel [user]]\n\n Get stats about the server or a channel```")
+    @bot.cmd("```\n{0} [channel [user]]\n\n Get stats about the server or a channel```", pm=False)
     async def stats(bot, message, parameters, recursion=0):
         params = parameters.split(' ')
         title = "Stats"
@@ -1320,7 +1323,7 @@ if __name__ == "__main__":
             fields = collections.OrderedDict([(k, "{} messages".format(msgcounts[k])) for k in sorted(msgcounts, key=msgcounts.get, reverse=True)[:10]])
             await bot.reply(message, "*{} messages total, {} nodes, {} edges*\n**Top 10 users**:".format(len(data), network.number_of_nodes(), network.number_of_edges()), title=title, fields=fields)
 
-    @bot.cmd("```\n{0} [channel [user]]\n\n Get stats about the server or a channel```")
+    @bot.cmd("```\n{0} [channel [user]]\n\n Get stats about the server or a channel```", pm=False)
     async def topusers(bot, message, parameters, recursion=0):
         params = parameters.split(' ')
         title = "Stats"
@@ -1425,6 +1428,90 @@ if __name__ == "__main__":
             fields = collections.OrderedDict([(k, "{:.2f} lines/day".format(avgmps[k]*86400)) for k in sorted(avgmps, key=avgmps.get, reverse=True)[:10]])
             message = await message.channel.send("{} messages total\nTop 10 users:".format(len(data)))
             await bot.reply(message, "*{} messages total*\n**Top 10 users**:".format(len(data)), title=title, fields=fields, footer="Page 3")
+
+    @bot.cmd("```\n{0} [user]\n\n Get stats about the server or a user```", pm=False)
+    async def topchans(bot, message, parameters, recursion=0):
+        params = parameters.split(' ')
+        title = "Stats"
+        data = []
+
+        if len(params) > 1:
+            await bot.reply(message, bot.commands['topchans'][1].format(message.clean_content.split(' ', 1)[0]), colour=discord.Colour.purple())
+            return
+
+        class Entry:
+            def __init__(self, entry):
+                self.chan = entry[0]
+                self.name = entry[1]
+                self.text = entry[2]
+
+        if parameters:
+            title = "Top Chans for **{}** on server **{}**".format(params[0], message.guild.name)
+        else:
+            title = "Top Chans for server **{}**".format(message.guild.name)
+        await bot.reply(message, "", title="Fetching: {}".format(title))
+        cursor = bot.logdb.cursor()
+        cursor.execute('''
+            SELECT c.name, CASE WHEN n.nick IS NULL THEN u.name else n.nick END as name, m.text FROM messages AS m
+            INNER JOIN channels AS c ON m.channel = c.channel
+            INNER JOIN users AS u ON m.user = u.user
+            INNER JOIN nicks AS n ON m.guild = n.guild AND m.user = n.user
+            WHERE m.guild = ? AND m.type = 0
+            ORDER BY m.time ASC
+        ''', (message.guild.id,))
+        data = [Entry(e) for e in cursor.fetchall()]
+
+        uname = None
+        if parameters:
+            await bot.reply(message, "{} messages".format(len(data)), title="Trimming: {}".format(title))
+            user = params[0].strip("<!@>")
+            if user.isdigit():
+                user = int(user)
+            else:
+                await bot.reply(message, "ERROR: Please enter a valid user.", colour=discord.Colour.red())
+                return
+            cursor.execute('''
+                SELECT CASE WHEN n.nick IS NULL THEN u.name ELSE n.nick END as name FROM users AS u
+                INNER JOIN nicks AS n ON n.guild = ? AND n.user = u.user
+                WHERE u.user = ?
+            ''', (message.guild.id, user))
+            name = cursor.fetchone()
+            if name is None:
+                member = message.guild.get_member(user)
+                if m is not None:
+                    uname = member.display_name
+                else:
+                    user = bot.client.get_user(user)
+                    uname = user.name
+            else:
+                uname = name[0]
+            data = [e for e in data if e.name == uname]
+        await bot.reply(message, "{} messages".format(len(data)), title="Generating: {}".format(title))
+
+        channelcounts = {}
+        for entry in data:
+            channelcounts[entry.chan] = channelcounts.get(entry.chan, 0) + 1
+        channelcounts = collections.OrderedDict([(k,channelcounts[k]) for k in sorted(channelcounts, key=channelcounts.get)])
+
+        labels, counts = zip(*channelcounts.items())
+        sizes = [100*(x/sum(counts)) for x in counts]
+
+        await bot.reply(message, "{} messages total in {} channels".format(len(data), len(labels)), title="Rendering: {}".format(title))
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot
+        matplotlib.pyplot.close("all")
+        fig, ax = matplotlib.pyplot.subplots(1, 1)
+        ax.pie(sizes, labels=labels, autopct="%1.1f%%", shadow=True)
+        ax.axis('equal')
+        matplotlib.pyplot.tight_layout()
+        imgdata = BytesIO()
+        matplotlib.pyplot.savefig(imgdata, format="PNG")
+        imgdata.seek(0)
+        await message.channel.send(title, file=discord.File(imgdata, filename="stats.png"))
+
+        fields = collections.OrderedDict([(k, "{} messages".format(channelcounts[k])) for k in sorted(channelcounts, key=channelcounts.get, reverse=True)[:10]])
+        await bot.reply(message, "*{} messages total in {} channels*\n**Top channels**:".format(len(data), len(labels)), title=title, fields=fields)
 
     bot.run()
 
